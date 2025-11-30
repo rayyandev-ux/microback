@@ -1,0 +1,712 @@
+{
+  "name": "microback-test",
+  "nodes": [
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "e77a2ff2-7270-4be9-b730-d1ff146a8716",
+                    "leftValue": "={{ $json.body.conversation.messages[0].attachments[0].file_type === \"image\" && $json.body.content && $json.body.content.trim() !== \"\" ? \"imagen-text\" : \"\" }}",
+                    "rightValue": "imagen-text",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "IMAGE-TEXT"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.conversation.messages[0].attachments[0].file_type }}",
+                    "rightValue": "image",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "99bbec4e-221f-4635-b2dc-663b43d1c535"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "IMAGEN"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "988d963a-c3c4-4a78-8914-678632a76127",
+                    "leftValue": "={{ $json.body.conversation.messages[0].attachments[0].file_type }}",
+                    "rightValue": "audio",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "AUDIO"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "786e4fb3-65bf-4c30-8361-c37a9787ce33",
+                    "leftValue": "={{ $json.body.conversation.messages[0].attachments }}",
+                    "rightValue": "audio",
+                    "operator": {
+                      "type": "array",
+                      "operation": "notExists",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "TEXT"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.3,
+      "position": [
+        -1040,
+        -1360
+      ],
+      "id": "19a44fa2-e9fb-452d-883a-67790864e254",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "binaryPropertyName": "=data",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        -592,
+        -1088
+      ],
+      "id": "3a1237da-5c32-4d1a-b4ae-0b8277e826c6",
+      "name": "Transcribe a recording",
+      "credentials": {
+        "openAiApi": {
+          "id": "vK37YEgFKUM2H7Df",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.body.conversation.messages[0].attachments[0].data_url }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -784,
+        -1104
+      ],
+      "id": "121f6c70-6777-478e-b99f-bd205d1de6e8",
+      "name": "HTTP AUDIO"
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "gpt-4o-mini"
+        },
+        "text": "¿Analiza esta imagen profundamente?",
+        "inputType": "base64",
+        "simplify": false,
+        "options": {
+          "detail": "low",
+          "maxTokens": 300
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        -592,
+        -1296
+      ],
+      "id": "14acde79-e555-4e55-9cb0-8e315369df12",
+      "name": "Analyze image",
+      "credentials": {
+        "openAiApi": {
+          "id": "vK37YEgFKUM2H7Df",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "push",
+        "list": "={{ $('Data Inicial').item.json.body.sender.custom_attributes.waha_whatsapp_jid }}_buffer",
+        "messageData": "={{ JSON.stringify({\n  mastertext: $json.mastertext,\n  timestamp: $now,\n  id: $('Data Inicial').item.json.body.id\n}) }}"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -1328
+      ],
+      "id": "c22105aa-c48a-4aa3-a1a5-0ccb802481aa",
+      "name": "Subir mensaje buffer",
+      "credentials": {
+        "redis": {
+          "id": "iyNQOBDHH5UwUfet",
+          "name": "Redis account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "propertyName": "input",
+        "key": "={{ $('Data Inicial').item.json.body.sender.custom_attributes.waha_whatsapp_jid }}_buffer",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        320,
+        -1264
+      ],
+      "id": "8358b62d-5c56-4170-9ac5-a74fc3b877d7",
+      "name": "Traer mensaje buffer",
+      "credentials": {
+        "redis": {
+          "id": "iyNQOBDHH5UwUfet",
+          "name": "Redis account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -352,
+        -816
+      ],
+      "id": "0b8363fc-22fc-4c6d-869e-d8d436ce2f75",
+      "name": "No hacer nada"
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "key": "={{ $('Data Inicial').item.json.body.sender.custom_attributes.waha_whatsapp_jid }}_buffer"
+      },
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        592,
+        -1104
+      ],
+      "id": "e6b3461f-a199-4f61-b778-46a3d432f4bd",
+      "name": "Limpiar mensaje buffer",
+      "credentials": {
+        "redis": {
+          "id": "iyNQOBDHH5UwUfet",
+          "name": "Redis account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c2ca13b7-2a1a-4f71-b61e-f405818dd3a2",
+              "name": "mastertext",
+              "value": "={{ $json.text }} {{ $json.audio }} {{ $json.image }} {{ $json['imagen-text'] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -64,
+        -1488
+      ],
+      "id": "36b87b16-1a67-40ad-a388-d8fd11a15d27",
+      "name": "MASTERTEXT"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1acabb55-632d-4d90-b8b4-9638849ca2a3",
+              "name": "image",
+              "value": "={{ $json.content ? 'IMAGE: ' + $json.content : '' }}",
+              "type": "string"
+            },
+            {
+              "id": "e7e0962e-4045-4ba6-9302-4b3de29405ef",
+              "name": "text",
+              "value": "={{ $json.body.content ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "57e3084b-16ac-4d0f-b943-cc665f37b630",
+              "name": "audio",
+              "value": "={{ $json.text ? 'AUDIO: ' + $json.text : '' }}",
+              "type": "string"
+            },
+            {
+              "id": "5cbc348b-82af-4b21-b4cc-b9a90a3b0506",
+              "name": "imagen-text",
+              "value": "={{ $json['imagen-text'] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -224,
+        -1328
+      ],
+      "id": "3b56d689-5945-4fb5-b4a0-e81aa9b28e98",
+      "name": "DEFINIR TIPO"
+    },
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -320,
+        -992
+      ],
+      "id": "c0431f5c-7dfc-4ac8-8814-548e3db497cb",
+      "name": "Wait1",
+      "webhookId": "72fc9e97-b3f7-4a8a-8e7d-14fdb2d37616"
+    },
+    {
+      "parameters": {
+        "content": "## Agrupa los mensajes en una cola a Redis",
+        "height": 736,
+        "width": 1184
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -1168,
+        -1600
+      ],
+      "typeVersion": 1,
+      "id": "9c1febc8-5b67-4db9-b3d0-9aa0a8468b0b",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "96acff63-2b4d-4eec-a953-49c3e5c0f3d9",
+                    "leftValue": "={{ JSON.parse($json.input?.last()).timestamp }}",
+                    "rightValue": "={{ $now.minus(30,'seconds') }}",
+                    "operator": {
+                      "type": "dateTime",
+                      "operation": "before"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "SEGUIR"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ JSON.parse($json.input?.last()).id }}",
+                    "rightValue": "={{ $('Data Inicial').item.json.body.id }}",
+                    "operator": {
+                      "type": "number",
+                      "operation": "notEquals"
+                    },
+                    "id": "93ef39b5-6c9b-414b-b58b-4e10ba6da440"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "NADA"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "ESPERAR"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        64,
+        -992
+      ],
+      "id": "73dcb39c-6e31-410f-bd2f-a62b38e2bd1e",
+      "name": "Decide"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Data Inicial').item.json.body.conversation.messages[0].attachments[0].data_url }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -784,
+        -1296
+      ],
+      "id": "dbaf5912-1e0f-41a1-ba51-3c55ecd161fc",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Data Inicial').item.json.body.conversation.messages[0].attachments[0].data_url }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -768,
+        -1440
+      ],
+      "id": "54ce4fe5-227a-41be-a4d6-bdff7ebe3a6a",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "text": "¿Analiza esta imagen profundamente?",
+        "inputType": "base64",
+        "options": {
+          "detail": "low",
+          "maxTokens": 300
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        -608,
+        -1440
+      ],
+      "id": "3dca3b0a-8956-4df0-854e-fbf459abdc80",
+      "name": "Analyze image1",
+      "credentials": {
+        "openAiApi": {
+          "id": "vK37YEgFKUM2H7Df",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2ec6edd4-8155-4128-be15-5047d3540802",
+              "name": "imagen-text",
+              "value": "={{ $json.content ? 'IMAGE: ' + $json.content : '' }} IMAGEN-FOOTER:{{ $('Data Inicial').item.json.body.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -464,
+        -1440
+      ],
+      "id": "923aec07-e8e4-4700-a7d7-c111838237ca",
+      "name": "Edit Fields"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP AUDIO",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DEFINIR TIPO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe a recording": {
+      "main": [
+        [
+          {
+            "node": "DEFINIR TIPO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP AUDIO": {
+      "main": [
+        [
+          {
+            "node": "Transcribe a recording",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze image": {
+      "main": [
+        [
+          {
+            "node": "DEFINIR TIPO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Subir mensaje buffer": {
+      "main": [
+        [
+          {
+            "node": "Traer mensaje buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Traer mensaje buffer": {
+      "main": [
+        [
+          {
+            "node": "Limpiar mensaje buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MASTERTEXT": {
+      "main": [
+        [
+          {
+            "node": "Subir mensaje buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DEFINIR TIPO": {
+      "main": [
+        [
+          {
+            "node": "MASTERTEXT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait1": {
+      "main": [
+        [
+          {
+            "node": "Traer mensaje buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide": {
+      "main": [
+        [
+          {
+            "node": "Limpiar mensaje buffer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No hacer nada",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Analyze image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Analyze image1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze image1": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "DEFINIR TIPO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "4d3f065c-2c1f-447a-8761-406d1dccbe6d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "06d249709261b0df489a8b5d36c9c6bdb7909225b64a1f3ef9cb76fca88780a3"
+  },
+  "id": "2jGTXZhLIENkDoqv",
+  "tags": []
+}

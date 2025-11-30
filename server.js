@@ -23,7 +23,7 @@ try {
   await redis.connect()
 } catch (_) {}
 
-const PATH = '/fb7a77d6-fe52-4622-b0af-07429a5e6e45'
+const PATH = '/webhook'
 
 function get(obj, path, def) {
   try {

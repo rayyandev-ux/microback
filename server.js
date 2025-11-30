@@ -2,6 +2,7 @@ import 'dotenv/config'
 import express from 'express'
 import { OpenAI } from 'openai'
 import { createClient } from 'redis'
+import sharp from 'sharp'
 
 const app = express()
 app.use(express.json({ limit: '25mb' }))
@@ -51,28 +52,25 @@ function isDataUrl(u) {
   return typeof u === 'string' && u.startsWith('data:')
 }
 
-async function toDataUriFromUrl(u) {
-  const res = await fetch(u)
-  const ct = res.headers.get('content-type') || 'application/octet-stream'
-  const buf = Buffer.from(await res.arrayBuffer())
-  const b64 = buf.toString('base64')
-  
-  // Si es webp, lo convertimos a png/jpeg para OpenAI, o lo marcamos como image/png si OpenAI lo acepta
-  // OpenAI Vision API soporta: JPEG, WEBP, GIF, PNG.
-  // El error dice: "Invalid MIME type. Only image types are supported."
-  // Asegurémonos de que el MIME sea correcto. A veces viene como binary/octet-stream.
-  
-  let mime = ct
-  if (mime === 'application/octet-stream' || !mime.startsWith('image/')) {
-      // Intentar detectar por extensión en URL si el mime es genérico
-      if (u.match(/\.webp(\?|$)/i)) mime = 'image/webp'
-      else if (u.match(/\.png(\?|$)/i)) mime = 'image/png'
-      else if (u.match(/\.jpe?g(\?|$)/i)) mime = 'image/jpeg'
-      else if (u.match(/\.gif(\?|$)/i)) mime = 'image/gif'
-      else mime = 'image/jpeg' // Fallback
+async function processImageToPng(input) {
+  try {
+    let buf
+    if (isDataUrl(input)) {
+       const matches = input.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/)
+       if (!matches || matches.length !== 3) return input
+       buf = Buffer.from(matches[2], 'base64')
+    } else {
+       const res = await fetch(input)
+       buf = Buffer.from(await res.arrayBuffer())
+    }
+    
+    // Convert to static PNG (fixes animated webp/stickers issues)
+    const pngBuf = await sharp(buf).toFormat('png').toBuffer()
+    return `data:image/png;base64,${pngBuf.toString('base64')}`
+  } catch (e) {
+    console.error('\x1b[31m%s\x1b[0m', `Error converting image to PNG: ${e.message}`)
+    return input // Fallback
   }
-
-  return `data:${mime};base64,${b64}`
 }
 
 async function bufferFromDataUrl(u) {
@@ -377,11 +375,11 @@ app.post(PATH, async (req, res) => {
   let imagenText = ''
 
   if (type === 'IMAGEN') {
-    const dataUri = isDataUrl(dataUrl) ? dataUrl : await toDataUriFromUrl(dataUrl)
+    const dataUri = await processImageToPng(dataUrl)
     const content = await analyzeImage(dataUri, '¿Analiza esta imagen profundamente?')
     image = content ? `IMAGE: ${content}` : ''
   } else if (type === 'IMAGE-TEXT') {
-    const dataUri = isDataUrl(dataUrl) ? dataUrl : await toDataUriFromUrl(dataUrl)
+    const dataUri = await processImageToPng(dataUrl)
     const content = await analyzeImage(dataUri, '¿Analiza esta imagen profundamente?')
     imagenText = `IMAGE: ${content}${text ? ` IMAGEN-FOOTER:${text}` : ''}`
   } else if (type === 'AUDIO') {

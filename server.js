@@ -92,22 +92,27 @@ async function fetchBuffer(u) {
 
 async function analyzeImage(dataUrl, prompt) {
   if (!process.env.OPENAI_API_KEY) return ''
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  const r = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: prompt },
-          { type: 'image_url', image_url: { url: dataUrl } }
-        ]
-      }
-    ],
-    max_tokens: 300
-  })
-  const c = r.choices?.[0]?.message?.content || ''
-  return trimOrEmpty(c)
+  try {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+    const r = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: dataUrl } }
+          ]
+        }
+      ],
+      max_tokens: 300
+    })
+    const c = r.choices?.[0]?.message?.content || ''
+    return trimOrEmpty(c)
+  } catch (err) {
+    console.error('\x1b[31m%s\x1b[0m', `Image analysis failed: ${err.message}`)
+    return ''
+  }
 }
 
 function getExtensionFromMime(mime) {

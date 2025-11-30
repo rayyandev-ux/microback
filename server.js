@@ -473,7 +473,7 @@ app.post(PATH, async (req, res) => {
     const prevRes = pendingRequests[jid].res
     if (prevRes && !prevRes.headersSent && !prevRes.writableEnded) {
       try {
-        prevRes.status(200).json([{ input: [] }])
+        prevRes.status(200).send('OK')
       } catch (e) {
         console.error('Error responding to cancelled request:', e.message)
       }
@@ -528,7 +528,12 @@ app.post(PATH, async (req, res) => {
 
       // Doble chequeo final antes de enviar
       if (!res.headersSent && !res.writableEnded) {
-        console.log(`Returning ${list.length} messages to n8n:`, JSON.stringify(list))
+        console.log(`Processing ${list.length} messages for forwarding:`, JSON.stringify(list))
+
+        if (list.length === 0) {
+             console.log('⚠️ List is empty. Skipping forward to EliteSeller Bot.')
+             return res.status(200).send('OK')
+        }
         
         // Extraemos los metadatos de conversación del último mensaje (el más reciente)
         // o de cualquiera, asumiendo que es la misma conversación.
@@ -563,7 +568,7 @@ app.post(PATH, async (req, res) => {
              }
         })
 
-        return res.status(200).json([
+        const payload = [
           {
             ...conversationMeta,
             query: { q: rootQuery },
@@ -571,7 +576,27 @@ app.post(PATH, async (req, res) => {
             conversation_id: rootConvId,
             input: cleanedList || []
           }
-        ])
+        ]
+
+        // Forward to EliteSeller Bot
+        const targetQ = rootQuery || 'gamersx8gmailcom-bot'
+        const webhookBaseUrl = process.env.WEBHOOK_URL || 'https://bot.eliteseller.app/webhook-test/41728f37-7ad6-4ca3-bba1-b046e05a112a'
+        const targetUrl = `${webhookBaseUrl}?q=${targetQ}`
+        
+        try {
+            console.log(`Forwarding payload to: ${targetUrl}`)
+            // Using global fetch (Node 18+)
+            const forwardRes = await fetch(targetUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            console.log(`Forwarding response status: ${forwardRes.status}`)
+        } catch (err) {
+            console.error('Error forwarding to EliteSeller:', err.message)
+        }
+
+        return res.status(200).send('OK')
       }
     }, 2000) // Espera de 2 segundos
   }

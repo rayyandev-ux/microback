@@ -1,0 +1,16 @@
+{
+  "name": "mini-back-eliteseller",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^4.19.2",
+    "openai": "^4.57.0",
+    "redis": "^4.7.0"
+  }
+}

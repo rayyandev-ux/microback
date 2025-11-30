@@ -481,7 +481,7 @@ app.post(PATH, async (req, res) => {
     delete pendingRequests[jid]
   }
 
-  console.log(`Waiting 2s for more messages from ${jid}...`)
+  console.log(`Waiting 4s for more messages from ${jid}...`)
   
   pendingRequests[jid] = {
     res,
@@ -598,7 +598,7 @@ app.post(PATH, async (req, res) => {
 
         return res.status(200).send('OK')
       }
-    }, 2000) // Espera de 2 segundos
+    }, 4000) // Espera de 4 segundos
   }
 })
 

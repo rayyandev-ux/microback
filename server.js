@@ -56,7 +56,23 @@ async function toDataUriFromUrl(u) {
   const ct = res.headers.get('content-type') || 'application/octet-stream'
   const buf = Buffer.from(await res.arrayBuffer())
   const b64 = buf.toString('base64')
-  return `data:${ct};base64,${b64}`
+  
+  // Si es webp, lo convertimos a png/jpeg para OpenAI, o lo marcamos como image/png si OpenAI lo acepta
+  // OpenAI Vision API soporta: JPEG, WEBP, GIF, PNG.
+  // El error dice: "Invalid MIME type. Only image types are supported."
+  // Asegurémonos de que el MIME sea correcto. A veces viene como binary/octet-stream.
+  
+  let mime = ct
+  if (mime === 'application/octet-stream' || !mime.startsWith('image/')) {
+      // Intentar detectar por extensión en URL si el mime es genérico
+      if (u.match(/\.webp(\?|$)/i)) mime = 'image/webp'
+      else if (u.match(/\.png(\?|$)/i)) mime = 'image/png'
+      else if (u.match(/\.jpe?g(\?|$)/i)) mime = 'image/jpeg'
+      else if (u.match(/\.gif(\?|$)/i)) mime = 'image/gif'
+      else mime = 'image/jpeg' // Fallback
+  }
+
+  return `data:${mime};base64,${b64}`
 }
 
 async function bufferFromDataUrl(u) {
@@ -106,28 +122,28 @@ function getExtensionFromMime(mime) {
 }
 
 async function transcribeAudio(dataUrl) {
-  console.log('Starting audio transcription for URL:', dataUrl ? dataUrl.substring(0, 50) + '...' : 'null')
+  // console.log('Starting audio transcription for URL:', dataUrl ? dataUrl.substring(0, 50) + '...' : 'null')
   try {
     const { buf, mime } = await fetchBuffer(dataUrl)
-    console.log('Audio buffer fetched: MIME type', mime, 'size', buf.length)
+    // console.log('Audio buffer fetched: MIME type', mime, 'size', buf.length)
     
     const ext = getExtensionFromMime(mime)
     const filename = `audio.${ext}`
     const file = new File([buf], filename, { type: mime })
     
     if (!process.env.OPENAI_API_KEY) {
-      console.log('OpenAI API key not found for audio transcription')
+      console.error('\x1b[31m%s\x1b[0m', 'OpenAI API key not found for audio transcription')
       return ''
     }
     
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-    console.log('Sending audio to Whisper API for transcription...', filename)
+    // console.log('Sending audio to Whisper API for transcription...', filename)
     const r = await openai.audio.transcriptions.create({ model: 'whisper-1', file })
     const text = r.text || ''
-    console.log('Audio transcription result:', text)
+    // console.log('Audio transcription result:', text)
     return trimOrEmpty(text)
   } catch (err) {
-    console.error('Audio transcription failed:', err.message)
+    console.error('\x1b[31m%s\x1b[0m', `Audio transcription failed: ${err.message}`)
     return ''
   }
 }
@@ -290,15 +306,15 @@ function buildMessageData(mastertext, messageId, replyContextId, replyContextTex
 }
 
 app.post(PATH, async (req, res) => {
-  console.log('--- INCOMING REQUEST ---')
-  console.log('Headers:', JSON.stringify(req.headers, null, 2))
+  // console.log('--- INCOMING REQUEST ---')
+  // console.log('Headers:', JSON.stringify(req.headers, null, 2))
   
   if (parseInt(req.headers['content-length'] || '0') === 0) {
-    console.warn('⚠️ WARNING: Request body is EMPTY (Content-Length: 0). Check n8n/sender configuration.')
+    console.error('\x1b[31m%s\x1b[0m', '⚠️ WARNING: Request body is EMPTY (Content-Length: 0). Check n8n/sender configuration.')
   }
 
   try {
-    console.log('Body Preview:', JSON.stringify(req.body).substring(0, 500))
+    // console.log('Body Preview:', JSON.stringify(req.body).substring(0, 500))
   } catch (_) {}
 
   const payload = req.body || {}
@@ -320,20 +336,20 @@ app.post(PATH, async (req, res) => {
     messageType === 1 || 
     messageType === 'outgoing'
   ) {
-    console.log(`🚫 Ignoring bot/outgoing message. SenderType: ${senderType}, MessageType: ${messageType}`)
+    // console.log(`🚫 Ignoring bot/outgoing message. SenderType: ${senderType}, MessageType: ${messageType}`)
     return res.status(200).json({ status: 'ignored', reason: 'bot_message' })
   }
   // ---------------------------
 
-  console.log('Extracted Body keys:', body ? Object.keys(body) : 'body is null/undefined')
+  // console.log('Extracted Body keys:', body ? Object.keys(body) : 'body is null/undefined')
   
   const messageId = get(body, 'id', null)
   const replyContextId = buildReplyContext(body)
   const replyContextText = getQuotedContent(body)
   const type = classify(body)
-  console.log('Classified Type:', type)
-  if (replyContextId) console.log('Reply Context ID:', replyContextId)
-  if (replyContextText) console.log('Reply Context Text:', replyContextText)
+  // console.log('Classified Type:', type)
+  if (replyContextId) {} // console.log('Reply Context ID:', replyContextId)
+  if (replyContextText) {} // console.log('Reply Context Text:', replyContextText)
 
   const attachRaw = get(body, 'conversation.messages.0.attachments', null)
   const attachments = Array.isArray(attachRaw) ? attachRaw : []
@@ -376,7 +392,7 @@ app.post(PATH, async (req, res) => {
   const mastertext = collapseSpaces(mastertextRaw)
 
   const jid = ensureJid(body)
-  console.log('JID:', jid)
+  // console.log('JID:', jid)
   const key = `${jid}_buffer`
 
   const qFromPayload = Array.isArray(payload) ? get(payload[0], 'query.q') : get(payload, 'query.q')
@@ -385,12 +401,12 @@ app.post(PATH, async (req, res) => {
   // Check if query parameter 'flush' is present to clear the buffer
   const flush = req.query.flush || get(body, 'query.flush') || get(body, 'flush')
   if (flush === 'true' || flush === true) {
-    console.log(`Flushing buffer for key: ${key}`)
+    // console.log(`Flushing buffer for key: ${key}`)
     await safeDel(key)
   }
 
   if (mastertext) {
-    console.log('Mastertext generated:', mastertext)
+    // console.log('Mastertext generated:', mastertext)
     
     // --- GLOBAL DEDUPLICATION ---
     // Verificar si el ID ya fue procesado recientemente (fuera del buffer actual)
@@ -398,7 +414,7 @@ app.post(PATH, async (req, res) => {
       const processedKey = `processed:${messageId}`
       const alreadyProcessed = await redis.get(processedKey)
       if (alreadyProcessed) {
-        console.log(`♻️ Skipping globally processed message ID: ${messageId}`)
+        // console.log(`♻️ Skipping globally processed message ID: ${messageId}`)
         // Respondemos "éxito" falso al debounce para que no se quede colgado esperando
         // Aunque en realidad, si es duplicado, simplemente no lo añadimos al buffer.
         // El debounce se encargará de devolver lo que haya (o nada).
@@ -428,7 +444,7 @@ app.post(PATH, async (req, res) => {
 
         if (!isDuplicate) {
           const messageData = buildMessageData(mastertext, messageId, replyContextId, replyContextText, body, queryQ)
-          console.log('Adding new message to Redis:', JSON.stringify(messageData))
+          // console.log('Adding new message to Redis:', JSON.stringify(messageData))
           await safeRPush(key, JSON.stringify(messageData))
           const maxKeepRaw = Number(process.env.REDIS_MAX_BUFFER || '20')
           const maxKeep = Number.isFinite(maxKeepRaw) && maxKeepRaw >= 1 ? maxKeepRaw : 20
@@ -437,7 +453,7 @@ app.post(PATH, async (req, res) => {
             await safeLTrim(key, curLen - maxKeep, -1)
           }
         } else {
-          console.log('⚠️ Skipping duplicate message in buffer with ID:', messageId)
+          // console.log('⚠️ Skipping duplicate message in buffer with ID:', messageId)
         }
       }
     } else {
@@ -455,18 +471,18 @@ app.post(PATH, async (req, res) => {
       
       if (!isDuplicate) {
           const messageData = buildMessageData(mastertext, messageId, replyContextId, replyContextText, body, queryQ)
-          console.log('Adding new message to Redis (no-ID):', JSON.stringify(messageData))
+          // console.log('Adding new message to Redis (no-ID):', JSON.stringify(messageData))
           await safeRPush(key, JSON.stringify(messageData))
       }
     }
   } else {
-  console.log('⚠️ Mastertext is empty. Nothing to add to Redis. Type:', type)
+  // console.log('⚠️ Mastertext is empty. Nothing to add to Redis. Type:', type)
 }
 
   // --- DEBOUNCE / WAIT LOGIC ---
   // Cancelar temporizador anterior y responder vacio a la peticion previa
   if (pendingRequests[jid]) {
-    console.log(`Canceling previous request for JID ${jid} to debounce...`)
+    // console.log(`Canceling previous request for JID ${jid} to debounce...`)
     clearTimeout(pendingRequests[jid].timer)
     
     // Verificar si la respuesta anterior aún es escribible antes de intentar responder
@@ -475,25 +491,27 @@ app.post(PATH, async (req, res) => {
       try {
         prevRes.status(200).send('OK')
       } catch (e) {
-        console.error('Error responding to cancelled request:', e.message)
+        console.error('\x1b[31m%s\x1b[0m', `Error responding to cancelled request: ${e.message}`)
       }
     }
     delete pendingRequests[jid]
   }
 
-  console.log(`Waiting 4s for more messages from ${jid}...`)
+  const debounceSeconds = Number(process.env.DEBOUNCE_SECONDS || '4')
+  const debounceMs = debounceSeconds * 1000
+  // console.log(`Waiting ${debounceSeconds}s for more messages from ${jid}...`)
   
   pendingRequests[jid] = {
     res,
     timer: setTimeout(async () => {
       // Verificar si esta petición sigue viva antes de procesar nada
       if (res.headersSent || res.writableEnded) {
-        console.log(`⚠️ Request for ${jid} already handled or closed. Skipping buffer processing.`)
+        // console.log(`⚠️ Request for ${jid} already handled or closed. Skipping buffer processing.`)
         delete pendingRequests[jid]
         return
       }
 
-      console.log(`Timeout reached for ${jid}. Processing buffer...`)
+      // console.log(`Timeout reached for ${jid}. Processing buffer...`)
       
       // Limpieza y obtencion del buffer final
       const maxKeep2Raw = Number(process.env.REDIS_MAX_BUFFER || '20')
@@ -522,16 +540,16 @@ app.post(PATH, async (req, res) => {
       list = uniqueList
       
       // Consumir (borrar) el buffer SIEMPRE para evitar duplicados en la siguiente llamada
-      console.log(`Clearing buffer for key: ${key} (auto-consume)`)
+      // console.log(`Clearing buffer for key: ${key} (auto-consume)`)
       await safeDel(key)
       delete pendingRequests[jid]
 
       // Doble chequeo final antes de enviar
       if (!res.headersSent && !res.writableEnded) {
-        console.log(`Processing ${list.length} messages for forwarding:`, JSON.stringify(list))
+        // console.log(`Processing ${list.length} messages for forwarding:`, JSON.stringify(list))
 
         if (list.length === 0) {
-             console.log('⚠️ List is empty. Skipping forward to EliteSeller Bot.')
+             // console.log('⚠️ List is empty. Skipping forward to EliteSeller Bot.')
              return res.status(200).send('OK')
         }
         
@@ -584,21 +602,21 @@ app.post(PATH, async (req, res) => {
         const targetUrl = `${webhookBaseUrl}?q=${targetQ}`
         
         try {
-            console.log(`Forwarding payload to: ${targetUrl}`)
+            // console.log(`Forwarding payload to: ${targetUrl}`)
             // Using global fetch (Node 18+)
             const forwardRes = await fetch(targetUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             })
-            console.log(`Forwarding response status: ${forwardRes.status}`)
+            // console.log(`Forwarding response status: ${forwardRes.status}`)
         } catch (err) {
-            console.error('Error forwarding to EliteSeller:', err.message)
+            console.error('\x1b[31m%s\x1b[0m', `Error forwarding to EliteSeller: ${err.message}`)
         }
 
         return res.status(200).send('OK')
       }
-    }, 4000) // Espera de 4 segundos
+    }, debounceMs)
   }
 })
 

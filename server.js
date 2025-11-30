@@ -310,6 +310,21 @@ app.post(PATH, async (req, res) => {
     body = payload.body && typeof payload.body === 'object' ? payload.body : payload
   }
 
+  // --- FILTER BOT MESSAGES ---
+  const senderType = get(body, 'sender.type') || get(body, 'sender_type')
+  const messageType = get(body, 'message_type')
+  
+  if (
+    senderType === 'agent_bot' || 
+    senderType === 'AgentBot' || 
+    messageType === 1 || 
+    messageType === 'outgoing'
+  ) {
+    console.log(`🚫 Ignoring bot/outgoing message. SenderType: ${senderType}, MessageType: ${messageType}`)
+    return res.status(200).json({ status: 'ignored', reason: 'bot_message' })
+  }
+  // ---------------------------
+
   console.log('Extracted Body keys:', body ? Object.keys(body) : 'body is null/undefined')
   
   const messageId = get(body, 'id', null)

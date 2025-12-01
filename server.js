@@ -329,18 +329,29 @@ app.post(PATH, async (req, res) => {
     body = payload.body && typeof payload.body === 'object' ? payload.body : payload
   }
 
-  // --- FILTER BOT MESSAGES ---
+  // --- FILTER MESSAGES ---
   const senderType = get(body, 'sender.type') || get(body, 'sender_type')
   const messageType = get(body, 'message_type')
+  const senderIdentifier = get(body, 'sender.identifier')
+  // Buscamos assignee_id en varios lugares por si acaso
+  const assigneeId = get(body, 'conversation.assignee_id') || get(body, 'conversation.messages.0.conversation.assignee_id')
+  
+  // CONDICIONES PARA PROCESAR (Si no se cumplen, se ignora):
+  // 1. message_type == 'incoming'
+  // 2. assignee_id is empty
+  // 3. sender.identifier != 'whatsapp.integration'
   
   if (
+    messageType !== 'incoming' ||
+    assigneeId || // Si tiene assignee, ignorar
+    senderIdentifier === 'whatsapp.integration' ||
+    // Filtros legacy/extra por seguridad
+    senderType === 'Bot' || 
     senderType === 'agent_bot' || 
-    senderType === 'AgentBot' || 
-    messageType === 1 || 
-    messageType === 'outgoing'
+    senderType === 'AgentBot'
   ) {
-    // console.log(`🚫 Ignoring bot/outgoing message. SenderType: ${senderType}, MessageType: ${messageType}`)
-    return res.status(200).json({ status: 'ignored', reason: 'bot_message' })
+    // console.log(`🚫 Ignoring message. Type: ${messageType}, Assignee: ${assigneeId}, Sender: ${senderIdentifier}`)
+    return res.status(200).json({ status: 'ignored', reason: 'filtered_policy' })
   }
   // ---------------------------
 

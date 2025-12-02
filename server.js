@@ -1,11 +1,18 @@
 import 'dotenv/config'
 import express from 'express'
+import cors from 'cors'
 import { OpenAI } from 'openai'
 import { createClient } from 'redis'
-import sharp from 'sharp'
+import { query, initDb } from './db.js'
+
+import { Groq } from 'groq-sdk'
 
 const app = express()
+app.use(cors())
 app.use(express.json({ limit: '25mb' }))
+
+// Initialize Database
+initDb()
 app.use(express.urlencoded({ extended: true, limit: '25mb' }))
 
 function makeRedisUrl() {
@@ -52,26 +59,7 @@ function isDataUrl(u) {
   return typeof u === 'string' && u.startsWith('data:')
 }
 
-async function processImageToPng(input) {
-  try {
-    let buf
-    if (isDataUrl(input)) {
-       const matches = input.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/)
-       if (!matches || matches.length !== 3) return input
-       buf = Buffer.from(matches[2], 'base64')
-    } else {
-       const res = await fetch(input)
-       buf = Buffer.from(await res.arrayBuffer())
-    }
-    
-    // Convert to static PNG (fixes animated webp/stickers issues)
-    const pngBuf = await sharp(buf).toFormat('png').toBuffer()
-    return `data:image/png;base64,${pngBuf.toString('base64')}`
-  } catch (e) {
-    console.error('\x1b[31m%s\x1b[0m', `Error converting image to PNG: ${e.message}`)
-    return input // Fallback
-  }
-}
+
 
 async function bufferFromDataUrl(u) {
   const [, meta, data] = u.match(/^data:(.*?);base64,(.*)$/) || []
@@ -88,28 +76,151 @@ async function fetchBuffer(u) {
   return { buf, mime: ct }
 }
 
-async function analyzeImage(dataUrl, prompt) {
-  if (!process.env.OPENAI_API_KEY) return ''
+async function logUsage(model, usage, mastertext) {
+  if (!usage) {
+    console.warn('Warning: No usage data provided for model:', model)
+    // Even if no usage is provided, we might want to log it as 0 tokens if it's an important event
+    // But for now, let's stick to returning if no usage, OR handle specific cases.
+    // However, Groq might return usage, so we expect it.
+    return
+  }
   try {
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-    const r = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: dataUrl } }
-          ]
-        }
-      ],
-      max_tokens: 300
-    })
-    const c = r.choices?.[0]?.message?.content || ''
-    return trimOrEmpty(c)
-  } catch (err) {
-    console.error('\x1b[31m%s\x1b[0m', `Image analysis failed: ${err.message}`)
-    return ''
+    const { prompt_tokens, completion_tokens, total_tokens } = usage
+    
+    // Ensure values are numbers
+    const p_tokens_raw = Number(prompt_tokens) || 0
+    const c_tokens_raw = Number(completion_tokens) || 0
+    const t_tokens_raw = Number(total_tokens) || (p_tokens_raw + c_tokens_raw)
+    
+    // Round for DB integer columns
+    const p_tokens = Math.ceil(p_tokens_raw)
+    const c_tokens = Math.ceil(c_tokens_raw)
+    const t_tokens = Math.ceil(t_tokens_raw)
+
+    // Insert log
+    await query(
+      'INSERT INTO openai_usage (model, prompt_tokens, completion_tokens, total_tokens, mastertext) VALUES ($1, $2, $3, $4, $5)',
+      [model, p_tokens, c_tokens, t_tokens, mastertext]
+    )
+
+    // Update daily summary
+    const today = new Date().toISOString().split('T')[0]
+    // Approximate cost calculation
+    let cost = 0
+    if (model === 'gpt-4o-mini') {
+       // ~$0.15 / 1M input, ~$0.60 / 1M output
+       cost = (p_tokens * 0.15 / 1000000) + (c_tokens * 0.60 / 1000000)
+    } else if (model.includes('llava') || model.includes('llama')) {
+       // Groq Vision Models
+       // Llama 4 Scout (17B): ~$0.11 / 1M input, ~$0.34 / 1M output (Preview pricing may vary, using estimate)
+       // Assuming similar to generic preview or low cost
+       // Using values from search: $0.11 input, $0.34 output
+       cost = (p_tokens * 0.11 / 1000000) + (c_tokens * 0.34 / 1000000)
+    } else if (model === 'whisper-large-v3-turbo') {
+       // Audio billed by time. 
+       // We store DURATION (seconds) in total_tokens for this model.
+       // Price: $0.111 / hour (Updated per user request)
+       // Cost = (seconds / 3600) * 0.111
+       // Use raw value for better cost precision
+       cost = (t_tokens_raw / 3600) * 0.111
+    }
+    
+    await query(
+      `INSERT INTO daily_usage_summary (date, total_tokens, total_cost)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (date)
+       DO UPDATE SET
+         total_tokens = daily_usage_summary.total_tokens + $2,
+         total_cost = daily_usage_summary.total_cost + $3`,
+      [today, t_tokens, cost]
+    )
+
+  } catch (e) {
+    console.error('Error logging usage:', e)
+  }
+}
+
+async function analyzeImage(dataUrl, prompt) {
+  // Ensure we have a valid Data URL (Base64) to avoid redirect (302) issues with Groq/OpenAI
+  let finalImageUrl = dataUrl
+  if (dataUrl && !isDataUrl(dataUrl)) {
+    try {
+      // console.log('Fetching image to convert to Base64...', dataUrl)
+      const { buf, mime } = await fetchBuffer(dataUrl)
+      const b64 = buf.toString('base64')
+      finalImageUrl = `data:${mime};base64,${b64}`
+    } catch (e) {
+      console.error('Error converting image to Base64:', e.message)
+      // Fallback to original URL if fetch fails
+    }
+  }
+
+  const provider = process.env.AI_PROVIDER || 'openai'
+  
+  if (provider === 'groq') {
+    if (!process.env.GROQ_API_KEY) {
+      console.error('Groq API Key missing')
+      return ''
+    }
+    try {
+      const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+      const r = await groq.chat.completions.create({
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              { type: 'image_url', image_url: { url: finalImageUrl } }
+            ]
+          }
+        ],
+        max_tokens: 300
+      })
+      const c = r.choices?.[0]?.message?.content || ''
+      
+      // Log usage
+      if (r.usage) {
+        console.log('Groq Usage:', JSON.stringify(r.usage))
+        await logUsage('meta-llama/llama-4-scout-17b-16e-instruct', r.usage, prompt) 
+      }
+
+      return trimOrEmpty(c)
+    } catch (err) {
+      console.error('\x1b[31m%s\x1b[0m', `Groq Image analysis failed: ${err.message}`)
+      return ''
+    }
+  } else {
+    // Default to OpenAI
+    if (!process.env.OPENAI_API_KEY) return ''
+    try {
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+      const r = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              { type: 'image_url', image_url: { url: finalImageUrl, detail: 'low' } }
+            ]
+          }
+        ],
+        max_tokens: 300
+      })
+      const c = r.choices?.[0]?.message?.content || ''
+      
+      // Log usage
+      if (r.usage) {
+        console.log('OpenAI Usage:', JSON.stringify(r.usage))
+        await logUsage('gpt-4o-mini', r.usage, prompt) 
+      }
+
+      return trimOrEmpty(c)
+    } catch (err) {
+      console.error('\x1b[31m%s\x1b[0m', `OpenAI Image analysis failed: ${err.message}`)
+      return ''
+    }
   }
 }
 
@@ -134,17 +245,47 @@ async function transcribeAudio(dataUrl) {
     const filename = `audio.${ext}`
     const file = new File([buf], filename, { type: mime })
     
-    if (!process.env.OPENAI_API_KEY) {
-      console.error('\x1b[31m%s\x1b[0m', 'OpenAI API key not found for audio transcription')
-      return ''
-    }
+    const provider = process.env.AI_PROVIDER || 'openai'
     
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-    // console.log('Sending audio to Whisper API for transcription...', filename)
-    const r = await openai.audio.transcriptions.create({ model: 'whisper-1', file })
-    const text = r.text || ''
-    // console.log('Audio transcription result:', text)
-    return trimOrEmpty(text)
+    if (provider === 'groq') {
+      if (!process.env.GROQ_API_KEY) {
+        console.error('\x1b[31m%s\x1b[0m', 'Groq API key not found for audio transcription')
+        return ''
+      }
+      
+      const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+      // console.log('Sending audio to Groq Whisper API for transcription...', filename)
+      const r = await groq.audio.transcriptions.create({ 
+        model: 'whisper-large-v3-turbo', 
+        file,
+        response_format: 'verbose_json'
+      })
+      const text = r.text || ''
+      const duration = r.duration || 0
+      
+      // Log usage (Audio: total_tokens stores DURATION in seconds for cost calculation)
+      await logUsage('whisper-large-v3-turbo', { prompt_tokens: 0, completion_tokens: 0, total_tokens: duration }, 'AUDIO TRANSCRIPTION')
+  
+      // console.log('Audio transcription result:', text)
+      return trimOrEmpty(text)
+    } else {
+      // OpenAI
+      if (!process.env.OPENAI_API_KEY) {
+        console.error('\x1b[31m%s\x1b[0m', 'OpenAI API key not found for audio transcription')
+        return ''
+      }
+      
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+      // console.log('Sending audio to Whisper API for transcription...', filename)
+      const r = await openai.audio.transcriptions.create({ model: 'whisper-1', file })
+      const text = r.text || ''
+      
+      // Log usage (OpenAI Audio - also usually 0 tokens in response, but let's log it)
+      await logUsage('whisper-1', { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }, 'AUDIO TRANSCRIPTION')
+
+      return trimOrEmpty(text)
+    }
+
   } catch (err) {
     console.error('\x1b[31m%s\x1b[0m', `Audio transcription failed: ${err.message}`)
     return ''
@@ -386,12 +527,10 @@ app.post(PATH, async (req, res) => {
   let imagenText = ''
 
   if (type === 'IMAGEN') {
-    const dataUri = await processImageToPng(dataUrl)
-    const content = await analyzeImage(dataUri, '¿Analiza esta imagen profundamente?')
+    const content = await analyzeImage(dataUrl, '¿Analiza esta imagen profundamente?')
     image = content ? `IMAGE: ${content}` : ''
   } else if (type === 'IMAGE-TEXT') {
-    const dataUri = await processImageToPng(dataUrl)
-    const content = await analyzeImage(dataUri, '¿Analiza esta imagen profundamente?')
+    const content = await analyzeImage(dataUrl, '¿Analiza esta imagen profundamente?')
     imagenText = `IMAGE: ${content}${text ? ` IMAGEN-FOOTER:${text}` : ''}`
   } else if (type === 'AUDIO') {
     const t = await transcribeAudio(dataUrl)
@@ -631,6 +770,43 @@ app.post(PATH, async (req, res) => {
         return res.status(200).send('OK')
       }
     }, debounceMs)
+  }
+})
+
+app.get('/api/usage', async (req, res) => {
+  try {
+    const result = await query('SELECT * FROM openai_usage ORDER BY timestamp DESC LIMIT 100')
+    res.json(result.rows)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/usage/daily', async (req, res) => {
+  try {
+    const result = await query('SELECT * FROM daily_usage_summary ORDER BY date DESC LIMIT 30')
+    res.json(result.rows)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/usage/stats', async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT 
+        DATE(timestamp) as date, 
+        model, 
+        SUM(total_tokens) as total_tokens, 
+        SUM(prompt_tokens) as prompt_tokens, 
+        SUM(completion_tokens) as completion_tokens 
+      FROM openai_usage 
+      GROUP BY DATE(timestamp), model 
+      ORDER BY date DESC
+    `)
+    res.json(result.rows)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
   }
 })
 

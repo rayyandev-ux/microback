@@ -6,6 +6,7 @@ import { createClient } from 'redis'
 import { query, initDb } from './db.js'
 
 import { Groq } from 'groq-sdk'
+import sharp from 'sharp'
 
 const app = express()
 app.use(cors())
@@ -134,9 +135,12 @@ async function logUsage(model, usage, mastertext) {
          total_cost = daily_usage_summary.total_cost + $3`,
       [today, t_tokens, cost]
     )
+    
+    return { cost, tokens: t_tokens }
 
   } catch (e) {
     console.error('Error logging usage:', e)
+    return { cost: 0, tokens: 0 }
   }
 }
 
@@ -147,8 +151,19 @@ async function analyzeImage(dataUrl, prompt) {
     try {
       // console.log('Fetching image to convert to Base64...', dataUrl)
       const { buf, mime } = await fetchBuffer(dataUrl)
-      const b64 = buf.toString('base64')
-      finalImageUrl = `data:${mime};base64,${b64}`
+      
+      // Convert to PNG using Sharp to ensure compatibility (e.g. WebP stickers)
+      let finalBuf = buf
+      let finalMime = mime
+      try {
+          finalBuf = await sharp(buf).png().toBuffer()
+          finalMime = 'image/png'
+      } catch (sharpErr) {
+          console.warn('Sharp conversion failed, using original buffer:', sharpErr.message)
+      }
+
+      const b64 = finalBuf.toString('base64')
+      finalImageUrl = `data:${finalMime};base64,${b64}`
     } catch (e) {
       console.error('Error converting image to Base64:', e.message)
       // Fallback to original URL if fetch fails
@@ -180,19 +195,20 @@ async function analyzeImage(dataUrl, prompt) {
       const c = r.choices?.[0]?.message?.content || ''
       
       // Log usage
+      let usageData = { cost: 0, tokens: 0 }
       if (r.usage) {
         console.log('Groq Usage:', JSON.stringify(r.usage))
-        await logUsage('meta-llama/llama-4-scout-17b-16e-instruct', r.usage, prompt) 
+        usageData = await logUsage('meta-llama/llama-4-scout-17b-16e-instruct', r.usage, prompt) || { cost: 0, tokens: 0 }
       }
 
-      return trimOrEmpty(c)
+      return { content: trimOrEmpty(c), ...usageData }
     } catch (err) {
       console.error('\x1b[31m%s\x1b[0m', `Groq Image analysis failed: ${err.message}`)
-      return ''
+      return { content: '', cost: 0, tokens: 0 }
     }
   } else {
     // Default to OpenAI
-    if (!process.env.OPENAI_API_KEY) return ''
+    if (!process.env.OPENAI_API_KEY) return { content: '', cost: 0, tokens: 0 }
     try {
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
       const r = await openai.chat.completions.create({
@@ -211,15 +227,16 @@ async function analyzeImage(dataUrl, prompt) {
       const c = r.choices?.[0]?.message?.content || ''
       
       // Log usage
+      let usageData = { cost: 0, tokens: 0 }
       if (r.usage) {
         console.log('OpenAI Usage:', JSON.stringify(r.usage))
-        await logUsage('gpt-4o-mini', r.usage, prompt) 
+        usageData = await logUsage('gpt-4o-mini', r.usage, prompt) || { cost: 0, tokens: 0 }
       }
 
-      return trimOrEmpty(c)
+      return { content: trimOrEmpty(c), ...usageData }
     } catch (err) {
       console.error('\x1b[31m%s\x1b[0m', `OpenAI Image analysis failed: ${err.message}`)
-      return ''
+      return { content: '', cost: 0, tokens: 0 }
     }
   }
 }
@@ -250,7 +267,7 @@ async function transcribeAudio(dataUrl) {
     if (provider === 'groq') {
       if (!process.env.GROQ_API_KEY) {
         console.error('\x1b[31m%s\x1b[0m', 'Groq API key not found for audio transcription')
-        return ''
+        return { content: '', cost: 0, tokens: 0 }
       }
       
       const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
@@ -264,15 +281,15 @@ async function transcribeAudio(dataUrl) {
       const duration = r.duration || 0
       
       // Log usage (Audio: total_tokens stores DURATION in seconds for cost calculation)
-      await logUsage('whisper-large-v3-turbo', { prompt_tokens: 0, completion_tokens: 0, total_tokens: duration }, 'AUDIO TRANSCRIPTION')
+      const usageData = await logUsage('whisper-large-v3-turbo', { prompt_tokens: 0, completion_tokens: 0, total_tokens: duration }, 'AUDIO TRANSCRIPTION') || { cost: 0, tokens: 0 }
   
       // console.log('Audio transcription result:', text)
-      return trimOrEmpty(text)
+      return { content: trimOrEmpty(text), ...usageData }
     } else {
       // OpenAI
       if (!process.env.OPENAI_API_KEY) {
         console.error('\x1b[31m%s\x1b[0m', 'OpenAI API key not found for audio transcription')
-        return ''
+        return { content: '', cost: 0, tokens: 0 }
       }
       
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -281,14 +298,14 @@ async function transcribeAudio(dataUrl) {
       const text = r.text || ''
       
       // Log usage (OpenAI Audio - also usually 0 tokens in response, but let's log it)
-      await logUsage('whisper-1', { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }, 'AUDIO TRANSCRIPTION')
+      const usageData = await logUsage('whisper-1', { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }, 'AUDIO TRANSCRIPTION') || { cost: 0, tokens: 0 }
 
-      return trimOrEmpty(text)
+      return { content: trimOrEmpty(text), ...usageData }
     }
 
   } catch (err) {
     console.error('\x1b[31m%s\x1b[0m', `Audio transcription failed: ${err.message}`)
-    return ''
+    return { content: '', cost: 0, tokens: 0 }
   }
 }
 
@@ -435,9 +452,11 @@ async function cleanRedisBuffer(key, maxKeep) {
 
 const pendingRequests = {} // { jid: { res, timer } }
 
-function buildMessageData(mastertext, messageId, replyContextId, replyContextText, body, queryQ) {
+function buildMessageData(mastertext, messageId, replyContextId, replyContextText, body, queryQ, cost, tokens) {
   return {
     mastertext,
+    cost: cost || 0,
+    tokens: tokens || 0,
     timestamp: nowIsoWithOffset(),
     id: messageId,
     reply_to_id: replyContextId,
@@ -501,15 +520,14 @@ app.post(PATH, async (req, res) => {
   const messageId = get(body, 'id', null)
   const replyContextId = buildReplyContext(body)
   const replyContextText = getQuotedContent(body)
-  const type = classify(body)
+  let type = classify(body)
   // console.log('Classified Type:', type)
   if (replyContextId) {} // console.log('Reply Context ID:', replyContextId)
   if (replyContextText) {} // console.log('Reply Context Text:', replyContextText)
 
+  // --- ITERATE ALL ATTACHMENTS ---
   const attachRaw = get(body, 'conversation.messages.0.attachments', null)
   const attachments = Array.isArray(attachRaw) ? attachRaw : []
-  const a0 = attachments[0]
-  const dataUrl = a0?.data_url
 
   let image = ''
   let text = ''
@@ -526,23 +544,114 @@ app.post(PATH, async (req, res) => {
   let audio = ''
   let imagenText = ''
 
-  if (type === 'IMAGEN') {
-    const content = await analyzeImage(dataUrl, '¿Analiza esta imagen profundamente?')
-    image = content ? `IMAGE: ${content}` : ''
-  } else if (type === 'IMAGE-TEXT') {
-    const content = await analyzeImage(dataUrl, '¿Analiza esta imagen profundamente?')
-    imagenText = `IMAGE: ${content}${text ? ` IMAGEN-FOOTER:${text}` : ''}`
-  } else if (type === 'AUDIO') {
-    const t = await transcribeAudio(dataUrl)
-    audio = t ? `AUDIO: ${t}` : ''
+  let combinedImages = []
+  let combinedAudios = []
+  let totalCost = 0
+  let totalTokens = 0
+
+  if (attachments.length > 0) {
+      for (const att of attachments) {
+          const fType = att.file_type
+          const dUrl = att.data_url
+          if (!dUrl) continue
+
+          if (fType === 'image') {
+              const result = await analyzeImage(dUrl, '¿Analiza esta imagen profundamente?')
+              if (result && result.content) {
+                  combinedImages.push(result.content)
+                  totalCost += (result.cost || 0)
+                  totalTokens += (result.tokens || 0)
+              }
+          } else if (fType === 'audio') {
+              const result = await transcribeAudio(dUrl)
+              if (result && result.content) {
+                  combinedAudios.push(result.content)
+                  totalCost += (result.cost || 0)
+                  totalTokens += (result.tokens || 0)
+              }
+          }
+      }
   }
 
-  if (type === 'TEXT' && !text && typeof get(body, 'content') === 'string') {
-    text = trimOrEmpty(get(body, 'content', ''))
+  // Construct final strings
+  if (combinedImages.length > 0) {
+      // If text exists, treat as IMAGE-TEXT, else IMAGEN
+      // But actually we just append all analyses
+      const joinedImages = combinedImages.join('\n---\n')
+      if (text) {
+          // IMAGE-TEXT scenario
+          imagenText = `IMAGE: ${joinedImages} IMAGEN-FOOTER:${text}`
+          type = 'IMAGE-TEXT' // force update type for logging if needed
+      } else {
+          image = `IMAGE: ${joinedImages}`
+          type = 'IMAGEN'
+      }
+  }
+  
+  if (combinedAudios.length > 0) {
+      audio = `AUDIO: ${combinedAudios.join('\n---\n')}`
+      if (!image && !imagenText) type = 'AUDIO'
   }
 
+  if (!image && !imagenText && !audio && text) {
+      type = 'TEXT'
+  }
+  
+  // Fallback if type was classified but no attachments found (weird edge case)
+  // or if we need to preserve original single-attachment logic for compatibility?
+  // The loop above handles single attachment too (length=1).
+  
   const mastertextRaw = buildMasterText(text, audio, image, imagenText, replyContextText)
   const mastertext = collapseSpaces(mastertextRaw)
+
+  try {
+    let inputContent = ''
+    // Store all dataUrls or text. For logs, we might want to show multiple images?
+    // For now, let's store the text + first image/audio URL or a summary
+    
+    if (attachments.length > 0) {
+        // Create a summary or JSON of inputs?
+        // Or just comma separated URLs?
+        const urls = attachments.map(a => a.data_url).filter(Boolean)
+        if (urls.length > 0) {
+             // If multiple, maybe JSON array?
+             // For backward compatibility with frontend (which expects string or dataUrl),
+             // let's stick to one input_content field.
+             // If multiple images, we can put them in a JSON array string.
+             if (urls.length === 1) inputContent = urls[0]
+             else inputContent = JSON.stringify(urls)
+        } else {
+            inputContent = text
+        }
+    } else {
+        inputContent = text
+    }
+
+    if (text && attachments.length > 0) {
+         // Mixed content (Text + Image)
+         // If we have a single image, inputContent is that image URL.
+         // But we also have text. The logs table only has one input_content column.
+         // We might lose the text visibility in the 'Input' column if we only show image.
+         // But the frontend 'LogsViewer' shows text if type is TEXT.
+         // Let's try to combine if possible or prioritize image for display.
+         // The user wants "que salga todo el output". 'output_content' is mastertext which has everything.
+         // 'input_content' is for the raw input.
+         
+         // Let's just keep inputContent as the media URL(s). The text is usually in the footer or separate.
+    }
+
+    // Limit input content length for logs if it's a huge data URL
+    if (inputContent && inputContent.length > 1000) {
+       inputContent = inputContent.substring(0, 1000) + '... (truncated)'
+    }
+
+    await query(
+      'INSERT INTO message_logs (type, input_content, output_content, cost, tokens) VALUES ($1, $2, $3, $4, $5)',
+      [type, inputContent, mastertext, totalCost, totalTokens]
+    )
+  } catch (e) {
+    console.error('Error saving message log:', e)
+  }
 
   const jid = ensureJid(body)
   // console.log('JID:', jid)
@@ -596,7 +705,7 @@ app.post(PATH, async (req, res) => {
         }
 
         if (!isDuplicate) {
-          const messageData = buildMessageData(mastertext, messageId, replyContextId, replyContextText, body, queryQ)
+          const messageData = buildMessageData(mastertext, messageId, replyContextId, replyContextText, body, queryQ, totalCost, totalTokens)
           // console.log('Adding new message to Redis:', JSON.stringify(messageData))
           await safeRPush(key, JSON.stringify(messageData))
           const maxKeepRaw = Number(process.env.REDIS_MAX_BUFFER || '20')
@@ -623,7 +732,7 @@ app.post(PATH, async (req, res) => {
       }
       
       if (!isDuplicate) {
-          const messageData = buildMessageData(mastertext, messageId, replyContextId, replyContextText, body, queryQ)
+          const messageData = buildMessageData(mastertext, messageId, replyContextId, replyContextText, body, queryQ, totalCost, totalTokens)
           // console.log('Adding new message to Redis (no-ID):', JSON.stringify(messageData))
           await safeRPush(key, JSON.stringify(messageData))
       }
@@ -650,7 +759,11 @@ app.post(PATH, async (req, res) => {
     delete pendingRequests[jid]
   }
 
-  const debounceSeconds = Number(process.env.DEBOUNCE_SECONDS || '4')
+  let debounceSeconds = Number(process.env.DEBOUNCE_SECONDS || '4')
+  // Rich media takes longer to produce/send multiple. Extend wait time for audio/image.
+  if (type === 'AUDIO' || type === 'IMAGEN' || type === 'IMAGE-TEXT') {
+     debounceSeconds = Math.max(debounceSeconds, 10)
+  }
   const debounceMs = debounceSeconds * 1000
   // console.log(`Waiting ${debounceSeconds}s for more messages from ${jid}...`)
   
@@ -770,6 +883,15 @@ app.post(PATH, async (req, res) => {
         return res.status(200).send('OK')
       }
     }, debounceMs)
+  }
+})
+
+app.get('/api/logs', async (req, res) => {
+  try {
+    const result = await query('SELECT * FROM message_logs ORDER BY timestamp DESC LIMIT 50')
+    res.json(result.rows)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
   }
 })
 

@@ -3,7 +3,7 @@ import express from 'express'
 import cors from 'cors'
 import { OpenAI } from 'openai'
 import { createClient } from 'redis'
-import { query, initDb } from './db.js'
+ 
 
 import { Groq } from 'groq-sdk'
 import sharp from 'sharp'
@@ -12,8 +12,7 @@ const app = express()
 app.use(cors())
 app.use(express.json({ limit: '25mb' }))
 
-// Initialize Database
-initDb()
+ 
 app.use(express.urlencoded({ extended: true, limit: '25mb' }))
 
 function makeRedisUrl() {
@@ -27,10 +26,24 @@ function makeRedisUrl() {
   return `${scheme}://${auth}${host}:${port}`
 }
 const redis = createClient({ url: makeRedisUrl() })
-redis.on('error', (e) => {})
+redis.on('error', (e) => { console.error('Redis error:', e.message) })
 try {
+  const infoUrl = makeRedisUrl()
+  let host = process.env.REDIS_HOST || '127.0.0.1'
+  let port = process.env.REDIS_PORT || '6379'
+  let ssl = String(process.env.REDIS_SSL || '').toLowerCase() === 'true'
+  try {
+    const u = new URL(infoUrl)
+    host = u.hostname || host
+    port = u.port || port
+    ssl = infoUrl.startsWith('rediss://') || ssl
+  } catch (_) {}
+  console.log(`Redis connecting host=${host} port=${port} ssl=${ssl}`)
   await redis.connect()
-} catch (_) {}
+  console.log('Redis connected')
+} catch (e) {
+  console.error('Redis connect failed:', e.message)
+}
 
 const PATH = '/webhook'
 
@@ -78,70 +91,23 @@ async function fetchBuffer(u) {
 }
 
 async function logUsage(model, usage, mastertext) {
-  if (!usage) {
-    console.warn('Warning: No usage data provided for model:', model)
-    // Even if no usage is provided, we might want to log it as 0 tokens if it's an important event
-    // But for now, let's stick to returning if no usage, OR handle specific cases.
-    // However, Groq might return usage, so we expect it.
-    return
+  if (!usage) return { cost: 0, tokens: 0 }
+  const { prompt_tokens, completion_tokens, total_tokens } = usage
+  const p_tokens_raw = Number(prompt_tokens) || 0
+  const c_tokens_raw = Number(completion_tokens) || 0
+  const t_tokens_raw = Number(total_tokens) || (p_tokens_raw + c_tokens_raw)
+  const p_tokens = Math.ceil(p_tokens_raw)
+  const c_tokens = Math.ceil(c_tokens_raw)
+  const t_tokens = Math.ceil(t_tokens_raw)
+  let cost = 0
+  if (model === 'gpt-4o-mini') {
+    cost = (p_tokens * 0.15 / 1000000) + (c_tokens * 0.60 / 1000000)
+  } else if (model.includes('llava') || model.includes('llama')) {
+    cost = (p_tokens * 0.11 / 1000000) + (c_tokens * 0.34 / 1000000)
+  } else if (model === 'whisper-large-v3-turbo') {
+    cost = (t_tokens_raw / 3600) * 0.111
   }
-  try {
-    const { prompt_tokens, completion_tokens, total_tokens } = usage
-    
-    // Ensure values are numbers
-    const p_tokens_raw = Number(prompt_tokens) || 0
-    const c_tokens_raw = Number(completion_tokens) || 0
-    const t_tokens_raw = Number(total_tokens) || (p_tokens_raw + c_tokens_raw)
-    
-    // Round for DB integer columns
-    const p_tokens = Math.ceil(p_tokens_raw)
-    const c_tokens = Math.ceil(c_tokens_raw)
-    const t_tokens = Math.ceil(t_tokens_raw)
-
-    // Insert log
-    await query(
-      'INSERT INTO openai_usage (model, prompt_tokens, completion_tokens, total_tokens, mastertext) VALUES ($1, $2, $3, $4, $5)',
-      [model, p_tokens, c_tokens, t_tokens, mastertext]
-    )
-
-    // Update daily summary
-    const today = new Date().toISOString().split('T')[0]
-    // Approximate cost calculation
-    let cost = 0
-    if (model === 'gpt-4o-mini') {
-       // ~$0.15 / 1M input, ~$0.60 / 1M output
-       cost = (p_tokens * 0.15 / 1000000) + (c_tokens * 0.60 / 1000000)
-    } else if (model.includes('llava') || model.includes('llama')) {
-       // Groq Vision Models
-       // Llama 4 Scout (17B): ~$0.11 / 1M input, ~$0.34 / 1M output (Preview pricing may vary, using estimate)
-       // Assuming similar to generic preview or low cost
-       // Using values from search: $0.11 input, $0.34 output
-       cost = (p_tokens * 0.11 / 1000000) + (c_tokens * 0.34 / 1000000)
-    } else if (model === 'whisper-large-v3-turbo') {
-       // Audio billed by time. 
-       // We store DURATION (seconds) in total_tokens for this model.
-       // Price: $0.111 / hour (Updated per user request)
-       // Cost = (seconds / 3600) * 0.111
-       // Use raw value for better cost precision
-       cost = (t_tokens_raw / 3600) * 0.111
-    }
-    
-    await query(
-      `INSERT INTO daily_usage_summary (date, total_tokens, total_cost)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (date)
-       DO UPDATE SET
-         total_tokens = daily_usage_summary.total_tokens + $2,
-         total_cost = daily_usage_summary.total_cost + $3`,
-      [today, t_tokens, cost]
-    )
-    
-    return { cost, tokens: t_tokens }
-
-  } catch (e) {
-    console.error('Error logging usage:', e)
-    return { cost: 0, tokens: 0 }
-  }
+  return { cost, tokens: t_tokens }
 }
 
 async function analyzeImage(dataUrl, prompt) {
@@ -451,6 +417,8 @@ async function cleanRedisBuffer(key, maxKeep) {
 }
 
 const pendingRequests = {} // { jid: { res, timer } }
+const pendingEchoRequests = {}
+const pendingTimers = {} // { key: timer }
 
 function buildMessageData(mastertext, messageId, replyContextId, replyContextText, body, queryQ, cost, tokens) {
   return {
@@ -501,18 +469,14 @@ app.post(PATH, async (req, res) => {
   // 2. assignee_id is empty
   // 3. sender.identifier != 'whatsapp.integration'
   
-  if (
+  const shouldProcess = !(
     messageType !== 'incoming' ||
-    assigneeId || // Si tiene assignee, ignorar
+    assigneeId ||
     senderIdentifier === 'whatsapp.integration' ||
-    // Filtros legacy/extra por seguridad
-    senderType === 'Bot' || 
-    senderType === 'agent_bot' || 
+    senderType === 'Bot' ||
+    senderType === 'agent_bot' ||
     senderType === 'AgentBot'
-  ) {
-    // console.log(`🚫 Ignoring message. Type: ${messageType}, Assignee: ${assigneeId}, Sender: ${senderIdentifier}`)
-    return res.status(200).json({ status: 'ignored', reason: 'filtered_policy' })
-  }
+  )
   // ---------------------------
 
   // console.log('Extracted Body keys:', body ? Object.keys(body) : 'body is null/undefined')
@@ -604,61 +568,14 @@ app.post(PATH, async (req, res) => {
   const mastertextRaw = buildMasterText(text, audio, image, imagenText, replyContextText)
   const mastertext = collapseSpaces(mastertextRaw)
 
-  try {
-    let inputContent = ''
-    // Store all dataUrls or text. For logs, we might want to show multiple images?
-    // For now, let's store the text + first image/audio URL or a summary
-    
-    if (attachments.length > 0) {
-        // Create a summary or JSON of inputs?
-        // Or just comma separated URLs?
-        const urls = attachments.map(a => a.data_url).filter(Boolean)
-        if (urls.length > 0) {
-             // If multiple, maybe JSON array?
-             // For backward compatibility with frontend (which expects string or dataUrl),
-             // let's stick to one input_content field.
-             // If multiple images, we can put them in a JSON array string.
-             if (urls.length === 1) inputContent = urls[0]
-             else inputContent = JSON.stringify(urls)
-        } else {
-            inputContent = text
-        }
-    } else {
-        inputContent = text
-    }
-
-    if (text && attachments.length > 0) {
-         // Mixed content (Text + Image)
-         // If we have a single image, inputContent is that image URL.
-         // But we also have text. The logs table only has one input_content column.
-         // We might lose the text visibility in the 'Input' column if we only show image.
-         // But the frontend 'LogsViewer' shows text if type is TEXT.
-         // Let's try to combine if possible or prioritize image for display.
-         // The user wants "que salga todo el output". 'output_content' is mastertext which has everything.
-         // 'input_content' is for the raw input.
-         
-         // Let's just keep inputContent as the media URL(s). The text is usually in the footer or separate.
-    }
-
-    // Limit input content length for logs if it's a huge data URL
-    if (inputContent && inputContent.length > 1000) {
-       inputContent = inputContent.substring(0, 1000) + '... (truncated)'
-    }
-
-    await query(
-      'INSERT INTO message_logs (type, input_content, output_content, cost, tokens) VALUES ($1, $2, $3, $4, $5)',
-      [type, inputContent, mastertext, totalCost, totalTokens]
-    )
-  } catch (e) {
-    console.error('Error saving message log:', e)
-  }
+  
 
   const jid = ensureJid(body)
-  // console.log('JID:', jid)
-  const key = `${jid}_buffer`
+  const convId = get(body, 'conversation.messages.0.conversation_id')
+  const key = convId ? `conv_${convId}_buffer` : `${jid}_buffer`
 
   const qFromPayload = Array.isArray(payload) ? get(payload[0], 'query.q') : get(payload, 'query.q')
-  const queryQ = req.query.q || qFromPayload || get(body, 'query.q') || 'gamersx8gmailcom-bot'
+  const queryQ = req.query.q || ''
 
   // Check if query parameter 'flush' is present to clear the buffer
   const flush = req.query.flush || get(body, 'query.flush') || get(body, 'flush')
@@ -711,6 +628,7 @@ app.post(PATH, async (req, res) => {
           const maxKeepRaw = Number(process.env.REDIS_MAX_BUFFER || '20')
           const maxKeep = Number.isFinite(maxKeepRaw) && maxKeepRaw >= 1 ? maxKeepRaw : 20
           const curLen = await safeLLen(key)
+          console.log(`buffer push id=${messageId} key=${key} size=${curLen}`)
           if (curLen > maxKeep) {
             await safeLTrim(key, curLen - maxKeep, -1)
           }
@@ -735,6 +653,8 @@ app.post(PATH, async (req, res) => {
           const messageData = buildMessageData(mastertext, messageId, replyContextId, replyContextText, body, queryQ, totalCost, totalTokens)
           // console.log('Adding new message to Redis (no-ID):', JSON.stringify(messageData))
           await safeRPush(key, JSON.stringify(messageData))
+          const afterLen = await safeLLen(key)
+          console.log(`buffer push no-id key=${key} size=${afterLen}`)
       }
     }
   } else {
@@ -742,43 +662,22 @@ app.post(PATH, async (req, res) => {
 }
 
   // --- DEBOUNCE / WAIT LOGIC ---
-  // Cancelar temporizador anterior y responder vacio a la peticion previa
-  if (pendingRequests[jid]) {
-    // console.log(`Canceling previous request for JID ${jid} to debounce...`)
-    clearTimeout(pendingRequests[jid].timer)
-    
-    // Verificar si la respuesta anterior aún es escribible antes de intentar responder
-    const prevRes = pendingRequests[jid].res
-    if (prevRes && !prevRes.headersSent && !prevRes.writableEnded) {
-      try {
-        prevRes.status(200).send('OK')
-      } catch (e) {
-        console.error('\x1b[31m%s\x1b[0m', `Error responding to cancelled request: ${e.message}`)
-      }
-    }
-    delete pendingRequests[jid]
+  // Cancelar temporizador anterior para esta conversación/JID
+  if (pendingTimers[key]) {
+    clearTimeout(pendingTimers[key])
+    delete pendingTimers[key]
   }
 
-  let debounceSeconds = Number(process.env.DEBOUNCE_SECONDS || '4')
+  let debounceSeconds = Number(process.env.DEBOUNCE_SECONDS || '5')
   // Rich media takes longer to produce/send multiple. Extend wait time for audio/image.
   if (type === 'AUDIO' || type === 'IMAGEN' || type === 'IMAGE-TEXT') {
      debounceSeconds = Math.max(debounceSeconds, 10)
   }
   const debounceMs = debounceSeconds * 1000
-  // console.log(`Waiting ${debounceSeconds}s for more messages from ${jid}...`)
+  console.log(`Waiting ${debounceSeconds}s for more messages from ${jid}...`)
   
-  pendingRequests[jid] = {
-    res,
-    timer: setTimeout(async () => {
-      // Verificar si esta petición sigue viva antes de procesar nada
-      if (res.headersSent || res.writableEnded) {
-        // console.log(`⚠️ Request for ${jid} already handled or closed. Skipping buffer processing.`)
-        delete pendingRequests[jid]
-        return
-      }
-
-      // console.log(`Timeout reached for ${jid}. Processing buffer...`)
-      
+  pendingTimers[key] = setTimeout(async () => {
+      console.log(`debounce timeout jid=${jid} key=${key}`)
       // Limpieza y obtencion del buffer final
       const maxKeep2Raw = Number(process.env.REDIS_MAX_BUFFER || '20')
       const maxKeep2 = Number.isFinite(maxKeep2Raw) && maxKeep2Raw >= 1 ? maxKeep2Raw : 20
@@ -806,18 +705,15 @@ app.post(PATH, async (req, res) => {
       list = uniqueList
       
       // Consumir (borrar) el buffer SIEMPRE para evitar duplicados en la siguiente llamada
-      // console.log(`Clearing buffer for key: ${key} (auto-consume)`)
       await safeDel(key)
-      delete pendingRequests[jid]
+      console.log(`buffer consumed key=${key}`)
+      delete pendingTimers[key]
 
-      // Doble chequeo final antes de enviar
-      if (!res.headersSent && !res.writableEnded) {
-        // console.log(`Processing ${list.length} messages for forwarding:`, JSON.stringify(list))
-
-        if (list.length === 0) {
-             // console.log('⚠️ List is empty. Skipping forward to EliteSeller Bot.')
-             return res.status(200).send('OK')
-        }
+      // console.log(`Processing ${list.length} messages for forwarding:`, JSON.stringify(list))
+      if (list.length === 0) {
+        console.log(`no messages to forward jid=${jid} key=${key}`)
+        return
+      }
         
         // Extraemos los metadatos de conversación del último mensaje (el más reciente)
         // o de cualquiera, asumiendo que es la misma conversación.
@@ -838,103 +734,51 @@ app.post(PATH, async (req, res) => {
             } catch (_) {}
         }
 
-        // Limpiamos el campo auxiliar _raw_conversation de la lista final para que el string JSON quede limpio
-        const cleanedList = list.map(itemStr => {
-             try {
-                 const item = JSON.parse(itemStr)
-                 delete item._raw_conversation
-                 delete item._query
-                 delete item.waha_whatsapp_jid
-                 delete item.conversation_id
-                 return JSON.stringify(item)
-             } catch (_) {
-                 return itemStr
-             }
-        })
+        const cleanedList = list
+          .map(itemStr => {
+            try {
+              const item = JSON.parse(itemStr)
+              return collapseSpaces(trimOrEmpty(item.mastertext || ''))
+            } catch (_) {
+              return ''
+            }
+          })
+          .filter(mt => !!mt)
 
-        const payload = [
-          {
-            ...conversationMeta,
-            query: { q: rootQuery },
-            waha_whatsapp_jid: rootWahaJid,
-            conversation_id: rootConvId,
-            input: cleanedList || []
-          }
-        ]
+        const webhookBaseUrl = process.env.WEBHOOK_URL
+        const finalQ = rootQuery || queryQ
+        const targetUrl = webhookBaseUrl && finalQ ? `${webhookBaseUrl}?q=${encodeURIComponent(finalQ)}` : (webhookBaseUrl || '')
 
-        // Forward to EliteSeller Bot
-        const targetQ = rootQuery || 'gamersx8gmailcom-bot'
-        const webhookBaseUrl = process.env.WEBHOOK_URL || 'https://bot.eliteseller.app/webhook-test/41728f37-7ad6-4ca3-bba1-b046e05a112a'
-        const targetUrl = `${webhookBaseUrl}?q=${targetQ}`
-        
-        try {
-            // console.log(`Forwarding payload to: ${targetUrl}`)
-            // Using global fetch (Node 18+)
-            const forwardRes = await fetch(targetUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            })
-            // console.log(`Forwarding response status: ${forwardRes.status}`)
-        } catch (err) {
-            console.error('\x1b[31m%s\x1b[0m', `Error forwarding to EliteSeller: ${err.message}`)
+        let responsePayload = {}
+        if (body && typeof body === 'object') {
+          responsePayload = { ...body }
         }
+        responsePayload.mastertext = cleanedList || []
+        console.log(`forwarding grouped count=${responsePayload.mastertext.length} url=${targetUrl}`)
 
-        return res.status(200).send('OK')
-      }
+        try {
+          console.log(`sending to webhook url=${targetUrl} count=${responsePayload.mastertext.length}`)
+          const r = await fetch(targetUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(responsePayload)
+          })
+          console.log(`webhook response status=${r.status} ok=${r.ok}`)
+          console.log(`forwarded grouped count=${responsePayload.mastertext.length} url=${targetUrl}`)
+        } catch (err) {
+          console.error('\x1b[31m%s\x1b[0m', `Error forwarding to EliteSeller: ${err.message}`)
+        }
     }, debounceMs)
-  }
+
+  return res.status(200).send('OK')
 })
 
-app.get('/api/logs', async (req, res) => {
-  try {
-    const result = await query('SELECT * FROM message_logs ORDER BY timestamp DESC LIMIT 50')
-    res.json(result.rows)
-  } catch (e) {
-    res.status(500).json({ error: e.message })
-  }
-})
+ 
 
-app.get('/api/usage', async (req, res) => {
-  try {
-    const result = await query('SELECT * FROM openai_usage ORDER BY timestamp DESC LIMIT 100')
-    res.json(result.rows)
-  } catch (e) {
-    res.status(500).json({ error: e.message })
-  }
-})
-
-app.get('/api/usage/daily', async (req, res) => {
-  try {
-    const result = await query('SELECT * FROM daily_usage_summary ORDER BY date DESC LIMIT 30')
-    res.json(result.rows)
-  } catch (e) {
-    res.status(500).json({ error: e.message })
-  }
-})
-
-app.get('/api/usage/stats', async (req, res) => {
-  try {
-    const result = await query(`
-      SELECT 
-        DATE(timestamp) as date, 
-        model, 
-        SUM(total_tokens) as total_tokens, 
-        SUM(prompt_tokens) as prompt_tokens, 
-        SUM(completion_tokens) as completion_tokens 
-      FROM openai_usage 
-      GROUP BY DATE(timestamp), model 
-      ORDER BY date DESC
-    `)
-    res.json(result.rows)
-  } catch (e) {
-    res.status(500).json({ error: e.message })
-  }
-})
 
 const port = process.env.PORT || 3000
 app.listen(port, () => {
-  console.log(`mini-back listening on port ${port}`)
+  console.log(`Mini-back listening on port ${port}`)
 })
 async function safeRPush(key, value) {
   try {

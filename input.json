@@ -1,0 +1,183 @@
+[
+  {
+    "headers": {
+      "host": "bot.eliteseller.app",
+      "user-agent": "rest-client/2.1.0 (linux-musl x86_64) ruby/3.4.4p34",
+      "content-length": "5298",
+      "accept": "application/json",
+      "accept-encoding": "gzip;q=1.0,deflate;q=0.6,identity;q=0.3",
+      "content-type": "application/json",
+      "x-forwarded-for": "172.18.0.1",
+      "x-forwarded-host": "bot.eliteseller.app",
+      "x-forwarded-port": "443",
+      "x-forwarded-proto": "https",
+      "x-forwarded-server": "89322a168cf3",
+      "x-real-ip": "172.18.0.1"
+    },
+    "params": {},
+    "query": {},
+    "body": {
+      "account": {
+        "id": 45,
+        "name": "gamersx8gmailcom (BOT)"
+      },
+      "additional_attributes": {},
+      "content_attributes": {},
+      "content_type": "text",
+      "content": "sdsd}sds",
+      "conversation": {
+        "additional_attributes": {},
+        "can_reply": true,
+        "channel": "Channel::Api",
+        "contact_inbox": {
+          "id": 1034,
+          "contact_id": 1028,
+          "inbox_id": 46,
+          "source_id": "60a2ed8c-e5ed-41bb-86e7-b537763a2cdc",
+          "created_at": "2025-11-22T18:00:55.735Z",
+          "updated_at": "2025-11-22T18:00:55.735Z",
+          "hmac_verified": false,
+          "pubsub_token": "jgYMvu1ztg3ydAWk2ei8y847"
+        },
+        "id": 2,
+        "inbox_id": 46,
+        "messages": [
+          {
+            "id": 128337,
+            "content": "sdsd}sds",
+            "account_id": 45,
+            "inbox_id": 46,
+            "conversation_id": 2,
+            "message_type": 0,
+            "created_at": 1765019152,
+            "updated_at": "2025-12-06T11:05:52.165Z",
+            "private": false,
+            "status": "sent",
+            "source_id": null,
+            "content_type": "text",
+            "content_attributes": {},
+            "sender_type": "Contact",
+            "sender_id": 1028,
+            "external_source_ids": {},
+            "additional_attributes": {},
+            "processed_message_content": "sdsd}sds",
+            "sentiment": {},
+            "conversation": {
+              "assignee_id": null,
+              "unread_count": 2,
+              "last_activity_at": 1765019152,
+              "contact_inbox": {
+                "source_id": "60a2ed8c-e5ed-41bb-86e7-b537763a2cdc"
+              }
+            },
+            "sender": {
+              "additional_attributes": {
+                "avatar_url_hash": "96c014292337c790c9a4c6620272dcb19e16864c2f8b6ded130c95a093582e31",
+                "last_avatar_sync_at": "2025-11-22T18:00:56Z"
+              },
+              "custom_attributes": {
+                "eliteseller_sale": false,
+                "waha_whatsapp_jid": "51924079147@c.us",
+                "waha_whatsapp_lid": "19232880373874@lid",
+                "eliteseller_hotness": "hot",
+                "eliteseller_trigger": false,
+                "waha_whatsapp_chat_id": "51924079147@c.us",
+                "eliteseller_last_message": "2025-12-05T17:21:11.927-05:00"
+              },
+              "email": null,
+              "id": 1028,
+              "identifier": null,
+              "name": "Ronald Rangel",
+              "phone_number": "+51924079147",
+              "thumbnail": "https://crm.eliteseller.app/rails/active_storage/representations/redirect/eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaHBBdklPIiwiZXhwIjpudWxsLCJwdXIiOiJibG9iX2lkIn19--baa5576aa96dedf501570c9500774053694c4e42/eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaDdCem9MWm05eWJXRjBTU0lJYW5CbkJqb0dSVlE2RTNKbGMybDZaVjkwYjE5bWFXeHNXd2RwQWZvdyIsImV4cCI6bnVsbCwicHVyIjoidmFyaWF0aW9uIn19--cc276ae22043cb925f1c58a1216e7f0aadc922a9/534427915_1182573807092961_1669448397124234776_n.jpg",
+              "blocked": false,
+              "type": "contact"
+            }
+          }
+        ],
+        "labels": [],
+        "meta": {
+          "sender": {
+            "additional_attributes": {
+              "avatar_url_hash": "96c014292337c790c9a4c6620272dcb19e16864c2f8b6ded130c95a093582e31",
+              "last_avatar_sync_at": "2025-11-22T18:00:56Z"
+            },
+            "custom_attributes": {
+              "eliteseller_sale": false,
+              "waha_whatsapp_jid": "51924079147@c.us",
+              "waha_whatsapp_lid": "19232880373874@lid",
+              "eliteseller_hotness": "hot",
+              "eliteseller_trigger": false,
+              "waha_whatsapp_chat_id": "51924079147@c.us",
+              "eliteseller_last_message": "2025-12-05T17:21:11.927-05:00"
+            },
+            "email": null,
+            "id": 1028,
+            "identifier": null,
+            "name": "Ronald Rangel",
+            "phone_number": "+51924079147",
+            "thumbnail": "https://crm.eliteseller.app/rails/active_storage/representations/redirect/eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaHBBdklPIiwiZXhwIjpudWxsLCJwdXIiOiJibG9iX2lkIn19--baa5576aa96dedf501570c9500774053694c4e42/eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaDdCem9MWm05eWJXRjBTU0lJYW5CbkJqb0dSVlE2RTNKbGMybDZaVjkwYjE5bWFXeHNXd2RwQWZvdyIsImV4cCI6bnVsbCwicHVyIjoidmFyaWF0aW9uIn19--cc276ae22043cb925f1c58a1216e7f0aadc922a9/534427915_1182573807092961_1669448397124234776_n.jpg",
+            "blocked": false,
+            "type": "contact"
+          },
+          "assignee": null,
+          "assignee_type": null,
+          "team": null,
+          "hmac_verified": false
+        },
+        "status": "open",
+        "custom_attributes": {},
+        "snoozed_until": null,
+        "unread_count": 2,
+        "first_reply_created_at": "2025-11-24T23:51:07.174Z",
+        "priority": null,
+        "waiting_since": 1764712956,
+        "agent_last_seen_at": 1765018952,
+        "contact_last_seen_at": 1765018712,
+        "last_activity_at": 1765019152,
+        "timestamp": 1765019152,
+        "created_at": 1763834456,
+        "updated_at": 1765019152.168212
+      },
+      "created_at": "2025-12-06T11:05:52.165Z",
+      "id": 128337,
+      "inbox": {
+        "id": 46,
+        "name": "WhatsApp"
+      },
+      "message_type": "incoming",
+      "private": false,
+      "sender": {
+        "account": {
+          "id": 45,
+          "name": "gamersx8gmailcom (BOT)"
+        },
+        "additional_attributes": {
+          "avatar_url_hash": "96c014292337c790c9a4c6620272dcb19e16864c2f8b6ded130c95a093582e31",
+          "last_avatar_sync_at": "2025-11-22T18:00:56Z"
+        },
+        "avatar": "https://crm.eliteseller.app/rails/active_storage/representations/redirect/eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaHBBdklPIiwiZXhwIjpudWxsLCJwdXIiOiJibG9iX2lkIn19--baa5576aa96dedf501570c9500774053694c4e42/eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaDdCem9MWm05eWJXRjBTU0lJYW5CbkJqb0dSVlE2RTNKbGMybDZaVjkwYjE5bWFXeHNXd2RwQWZvdyIsImV4cCI6bnVsbCwicHVyIjoidmFyaWF0aW9uIn19--cc276ae22043cb925f1c58a1216e7f0aadc922a9/534427915_1182573807092961_1669448397124234776_n.jpg",
+        "custom_attributes": {
+          "eliteseller_sale": false,
+          "waha_whatsapp_jid": "51924079147@c.us",
+          "waha_whatsapp_lid": "19232880373874@lid",
+          "eliteseller_hotness": "hot",
+          "eliteseller_trigger": false,
+          "waha_whatsapp_chat_id": "51924079147@c.us",
+          "eliteseller_last_message": "2025-12-05T17:21:11.927-05:00"
+        },
+        "email": null,
+        "id": 1028,
+        "identifier": null,
+        "name": "Ronald Rangel",
+        "phone_number": "+51924079147",
+        "thumbnail": "https://crm.eliteseller.app/rails/active_storage/representations/redirect/eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaHBBdklPIiwiZXhwIjpudWxsLCJwdXIiOiJibG9iX2lkIn19--baa5576aa96dedf501570c9500774053694c4e42/eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaDdCem9MWm05eWJXRjBTU0lJYW5CbkJqb0dSVlE2RTNKbGMybDZaVjkwYjE5bWFXeHNXd2RwQWZvdyIsImV4cCI6bnVsbCwicHVyIjoidmFyaWF0aW9uIn19--cc276ae22043cb925f1c58a1216e7f0aadc922a9/534427915_1182573807092961_1669448397124234776_n.jpg",
+        "blocked": false
+      },
+      "source_id": null,
+      "event": "message_created"
+    },
+    "webhookUrl": "https://bot.eliteseller.app/webhook-test/legacy",
+    "executionMode": "test"
+  }
+]
